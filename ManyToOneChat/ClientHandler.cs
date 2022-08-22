@@ -6,6 +6,8 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Security.Cryptography;
+using System.IO;
 
 namespace ManyToOneChat
 {
@@ -18,6 +20,8 @@ namespace ManyToOneChat
         public TcpClient clientSocket;
         public NetworkStream clientStream;
         private bool isConnected;
+
+        private byte[] privateKey;
 
         //Message properties
         public int newMessageCount { get; set; }
@@ -32,21 +36,46 @@ namespace ManyToOneChat
             this.clientSocket = client;
             clientStream = clientSocket.GetStream();
             isConnected = true;
+            messageList = new List<Message>();
+
+
+
+            //Send server username
+
+
+            Aes aes = Aes.Create();
+            privateKey = aes.Key;
+
+            Message outgoingMsg = new Message(MessageControlFlag.USERNAME, MessageSender.SERVER, serverUsername);
+            byte[] newOutgoingMsg = outgoingMsg.ConvertToByte();
+            
+
+            byte[] outStream = new byte[32 + newOutgoingMsg.Length];
+            Buffer.BlockCopy(privateKey, 0, outStream, 0, 32);
+            Buffer.BlockCopy(newOutgoingMsg, 0, outStream, 32, newOutgoingMsg.Length);
+
+            clientStream.Write(outStream, 0, outStream.Length);
+            clientStream.Flush();
+
+
 
             //Get client Username
             byte[] receivedDataBytes = new byte[1000];
             clientStream.Read(receivedDataBytes, 0, receivedDataBytes.Length);
 
-            messageList = new List<Message>();
-            Message message = new Message(receivedDataBytes, MessageSender.CLIENT);
+            byte[] receivedKey = new byte[32];
+            Buffer.BlockCopy(receivedDataBytes, 0, receivedKey, 0, 32);
+            byte[] receivedMessage = new byte[receivedDataBytes.Length - 32];
+            Buffer.BlockCopy(receivedDataBytes, 32, receivedMessage, 0, receivedDataBytes.Length - 32);
+
+
+            //If have extra time, make it such that the clienthandler auto unregisters itself from serverclientmanager
+            if (receivedKey != privateKey)
+                Console.WriteLine("[ERROR] Private key doesn't match..");
+
+            Message message = new Message(receivedMessage, MessageSender.CLIENT);
             clientUsername = message.message;
             
-            //Send server username
-            Message outgoingMsg = new Message(MessageControlFlag.USERNAME, MessageSender.SERVER, serverUsername);
-            byte[] outStream = outgoingMsg.ConvertToByte();
-            clientStream.Write(outStream, 0, outStream.Length);
-            clientStream.Flush();
-
             Thread awaitMsgThread = new Thread(WaitMessage);
             awaitMsgThread.Start();
 
@@ -60,13 +89,10 @@ namespace ManyToOneChat
         /// <param name="message"></param>
         public void SendMessage(Message message)
         {
-            string editedMessage = message.controlFlag + 'Ÿ' + message.message;
-
-            byte[] outStream = message.ConvertToByte();
+            byte[] outStream = AESEncryption.EncryptStream(message, privateKey);
 
             clientStream.Write(outStream, 0, outStream.Length);
             clientStream.Flush();
-
             messageList.Add(message);
             ServerClientManager.Instance.OnNewMessage(this);
 
@@ -95,9 +121,11 @@ namespace ManyToOneChat
 
                     clientStream.Read(inStream, 0, inStream.Length);
 
-                    Message message = new Message(inStream, MessageSender.CLIENT);
+                    byte[] messageByte = AESEncryption.DecryptStream(inStream, privateKey, out bool isDisconnectMsg);
 
-                    if (message.controlFlag == MessageControlFlag.DISCONNECT)
+                    Message message = new Message(messageByte, MessageSender.CLIENT);
+
+                    if (isDisconnectMsg || message.controlFlag == MessageControlFlag.DISCONNECT)
                     {
                         CloseConnection();
                         break;

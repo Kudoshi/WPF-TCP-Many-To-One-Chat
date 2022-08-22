@@ -129,7 +129,8 @@ namespace ManyToOneChat.Controller
 
         public void View_EndConversation()
         {
-            currentChatWith.CloseConnection();
+            if (currentChatWith != null)
+                currentChatWith.CloseConnection();
         }
         public void View_ChangeMessagePanel(object sender, MouseButtonEventArgs e)
         {

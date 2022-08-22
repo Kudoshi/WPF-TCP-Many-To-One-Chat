@@ -114,6 +114,7 @@ namespace ManyToOneChat
         public void CloseServer()
         {
             List<ClientHandler> clientListToClose = new List<ClientHandler>(clientList);
+
             for (int i = 0; i < clientListToClose.Count; i++)
             {
                 clientListToClose[i].CloseConnection(); 

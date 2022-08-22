@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +20,7 @@ namespace ManyToOneChat
 
         private IPAddress serverIPAddress;
         private int serverPort;
+        private byte[] privateKey;
         public string serverUsername;
         public TcpClient serverSocket;
         public NetworkStream serverStream;
@@ -91,18 +94,33 @@ namespace ManyToOneChat
             
             isConnected = true;
 
-            //Send client username
-            Message outgoingMsg = new Message(MessageControlFlag.USERNAME, MessageSender.CLIENT, clientUsername);
-            byte[] outStream = outgoingMsg.ConvertToByte();
-            serverStream.Write(outStream, 0, outStream.Length);
-            serverStream.Flush();
 
             //Receive server username
+
             byte[] receivedDataBytes = new byte[1000];
             serverStream.Read(receivedDataBytes, 0, receivedDataBytes.Length);
 
-            Message receivedMessage = new Message(receivedDataBytes, MessageSender.CLIENT);
-            serverUsername = receivedMessage.message;
+            byte[] receivedKey = new byte[32];
+            Buffer.BlockCopy(receivedDataBytes, 0, receivedKey, 0, 32);
+            privateKey = receivedKey;
+            byte[] receivedMessage = new byte[receivedDataBytes.Length - 32];
+            Buffer.BlockCopy(receivedDataBytes, 32, receivedMessage, 0, receivedDataBytes.Length - 32);
+
+            Message receivedMsg = new Message(receivedMessage, MessageSender.CLIENT);
+            serverUsername = receivedMsg.message;
+
+
+            //Send client username
+            Message outgoingMsg = new Message(MessageControlFlag.USERNAME, MessageSender.CLIENT, clientUsername);
+            byte[] newOutgoingMsg = outgoingMsg.ConvertToByte();
+
+            byte[] outStream = new byte[32 + newOutgoingMsg.Length];
+            Buffer.BlockCopy(privateKey, 0, outStream, 0, 32);
+            Buffer.BlockCopy(newOutgoingMsg, 0, outStream, 32, newOutgoingMsg.Length);
+
+            serverStream.Write(outStream, 0, outStream.Length);
+            serverStream.Flush();
+
 
             Thread awaitMsgThread = new Thread(WaitMessage);
             awaitMsgThread.Start();
@@ -110,13 +128,10 @@ namespace ManyToOneChat
 
         public void SendMessage(Message message)
         {
-            string editedMessage = message.controlFlag + 'Ÿ' + message.message;
-
-            byte[] outStream = message.ConvertToByte();
+            byte[] outStream = AESEncryption.EncryptStream(message, privateKey);
 
             serverStream.Write(outStream, 0, outStream.Length);
             serverStream.Flush();
-
             messageList.Add(message);
             OnNewMessage(this);
             
@@ -131,7 +146,9 @@ namespace ManyToOneChat
                     byte[] inStream = new byte[1000];
                     serverStream.Read(inStream, 0, inStream.Length);
 
-                    Message message = new Message(inStream, MessageSender.SERVER);
+                    byte[] messageByte = AESEncryption.DecryptStream(inStream, privateKey, out bool isDisconnectMsg);
+
+                    Message message = new Message(messageByte, MessageSender.SERVER);
 
                     if (message.controlFlag == MessageControlFlag.DISCONNECT)
                     {
